@@ -1,0 +1,7 @@
+{
+  "schemaVersion": 1,
+  "id": "loom-hacks-test",
+  "version": "${version}",
+  "license": "MIT",
+  "environment": "*"
+}
