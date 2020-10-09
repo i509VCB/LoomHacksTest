@@ -8,7 +8,7 @@ import java.io.Writer
  *
  * @param writer The output writer, to write to
  */
-class TinyV2MappingsWriter (writer: Writer?, private val obfNamespace: String, private val deobfNamespace: String) : TextMappingsWriter(writer) {
+class TinyV2MappingsWriter(writer: Writer?, private val obfNamespace: String, private val deobfNamespace: String) : TextMappingsWriter(writer) {
     @Throws(IOException::class)
     override fun write(mappings: MappingSet) {
         // Write the header, below for example
@@ -52,9 +52,8 @@ class TinyV2MappingsWriter (writer: Writer?, private val obfNamespace: String, p
                 printTab()
 
                 // Write the field type. This is required
-                writer.print(fieldMapping.type.orElseThrow<RuntimeException> {
-                    RuntimeException(java.lang.String.format("Cannot write field \"%s -> %s\" in class \"%s -> %s\" since it has no field type",
-                            fieldMapping.obfuscatedName, fieldMapping.deobfuscatedSignature, classMapping.getFullObfuscatedName(), classMapping.getFullDeobfuscatedName()))
+                writer.print(fieldMapping.type.orElseThrow {
+                    RuntimeException("Cannot write field \"${fieldMapping.obfuscatedName} -> ${fieldMapping.deobfuscatedSignature}\" in class \"${classMapping.fullObfuscatedName} -> ${classMapping.fullDeobfuscatedName}\" since it has no field type")
                 })
 
                 printTab()

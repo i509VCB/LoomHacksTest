@@ -1,7 +1,6 @@
 import com.google.gson.Gson
 import com.google.gson.JsonObject
 import net.fabricmc.loom.LoomGradleExtension
-import net.fabricmc.tinyremapper.IMappingProvider
 import net.fabricmc.tinyremapper.NonClassCopyMode
 import net.fabricmc.tinyremapper.OutputConsumerPath
 import net.fabricmc.tinyremapper.TinyRemapper
@@ -20,7 +19,9 @@ import org.gradle.kotlin.dsl.getByType
 import java.io.File
 import java.io.InputStream
 import java.io.InputStreamReader
+import java.nio.file.Files
 import java.util.jar.JarFile
+import java.util.zip.ZipFile
 
 // dependencies?
 // binarypatcher - ConsoleTool
@@ -58,20 +59,17 @@ class ForgeJarProcessor (private val project: Project, private val extension: (F
             throw IllegalArgumentException("MCP Config could not be found");
         }
 
-        var jarFile: JarFile? = null
-
         // We should only have one zip file here
         mcpConfig.forEach { file ->
             mcpConfigFile = file
-            jarFile = JarFile(file)
-            val config = jarFile!!.entries().toList().filter {
-                return@filter !it.isDirectory && it.name.endsWith("config.json")
-            }.first()
+            JarFile(file).use {
+                val config = it.entries().toList().filter { config ->
+                    return@filter !config.isDirectory && config.name.endsWith("config.json")
+                }.first()
 
-            mcpConfigSpec = readSpec(GSON.fromJson(InputStreamReader(jarFile!!.getInputStream(config)), JsonObject::class.java))
+                mcpConfigSpec = readSpec(GSON.fromJson(InputStreamReader(it.getInputStream(config)), JsonObject::class.java))
+            }
         }
-
-        jarFile!!
 
         // TODO: resolve forge patches
     }
@@ -93,43 +91,15 @@ class ForgeJarProcessor (private val project: Project, private val extension: (F
         val tinyReader = net.fabricmc.lorenztiny.TinyMappingsReader(mappings, "official", "intermediary")
         val obfToIntermediary = tinyReader.read()
 
-        val mcpConfig = JarFile(mcpConfigFile)
-        val joinedMappingsEntry = mcpConfig.getJarEntry(mcpConfigSpec.joinedMappings)
+        val mcpConfig = ZipFile(mcpConfigFile)
+        val joinedMappingsEntry = mcpConfig.getEntry(mcpConfigSpec.joinedMappings)
 
-        val obfToSrg = generateSrgMappings(mcpConfig.getInputStream(joinedMappingsEntry))
+        val obfToSrg = createSrgMappings(mcpConfig.getInputStream(joinedMappingsEntry))
         // TODO: Apply parameter names?
         //  Patches rely on srg param names
 
-        // Generate the inheritance provider so we have fully cascaded mappings
-        val clientJarFile = JarFile(clientJar)
-        val cascadingInheritanceProvider = CascadingInheritanceProvider()
-        val providers = mutableListOf<ClassProvider>()
-        providers.add(JarFileClassProvider(clientJarFile))
-        cascadingInheritanceProvider.install(ClassProviderInheritanceProvider(ClassProvider { className ->
-            providers.forEach {
-                val bytes: ByteArray? = it.get(className)
-
-                if (bytes != null) {
-                    return@ClassProvider bytes
-                }
-            }
-
-            return@ClassProvider null
-        }))
-
-        // Install JRE classes
-        cascadingInheritanceProvider.install(ReflectionInheritanceProvider(ClassLoader.getSystemClassLoader()))
-
-        val cachingInheritanceProvider = CachingInheritanceProvider(cascadingInheritanceProvider)
-
-        // Iterate through obf -> intermediary and obf -> srg and complete field mappings
-        iterateClasses(obfToIntermediary) {
-            it.complete(cachingInheritanceProvider)
-        }
-
-        iterateClasses(obfToSrg) {
-            it.complete(cachingInheritanceProvider)
-        }
+        // Complete inheritance for mappings
+        completeMappings(clientJar, obfToIntermediary, obfToSrg)
 
         // Srg mappings do not have field signatures included, we will generate those by using intermediary
         obfToSrg.addFieldTypeProvider {
@@ -138,50 +108,36 @@ class ForgeJarProcessor (private val project: Project, private val extension: (F
                     .flatMap { fieldMapping -> fieldMapping.type }
         }
 
-        clientJarFile.close()
-
-        // FUCK
-        // So apparently SRG has a class mapping that no longer exists
-        // This does not cause an issue in 1.14.4 (Spunbric remapper v1) but it's an issue in 1.16.2 and 1.16.3
-        // Reflection time it is
-        val topLevelClassesField = obfToSrg.javaClass.getDeclaredField("topLevelClasses")
-        topLevelClassesField.isAccessible = true
-        @Suppress("UNCHECKED_CAST")
-        val topLevelClasses: MutableMap<String, TopLevelClassMapping> = topLevelClassesField.get(obfToSrg) as MutableMap<String, TopLevelClassMapping>
-        topLevelClasses.remove("afd")
+        applySrgMappingHacks(obfToSrg)
 
         // Make srg -> intermediary mappings
         val srgToIntermediary = obfToSrg.reverse().merge(obfToIntermediary)
 
         val srgClientJar = clientJar.absoluteFile.parentFile.toPath().resolve("minecraft-$minecraftVersion-srg-mapped.jar")
         val tinyRemapper = TinyRemapper.newRemapper()
-                .ignoreConflicts(true)
+                .ignoreConflicts(true) // The mappings process isn't perfect, it requires a little slack with conflicts
                 .fixPackageAccess(true)
-                .withMappings { acceptor ->
-                    iterateClasses(obfToSrg) {
-                        acceptor.acceptClass(it.fullObfuscatedName, it.fullDeobfuscatedName)
-
-                        it.fieldMappings.forEach { field ->
-                            acceptor.acceptField(IMappingProvider.Member(it.fullObfuscatedName, field.obfuscatedName, field.type.get().toString()), field.deobfuscatedName)
-                        }
-
-                        it.methodMappings.forEach { method ->
-                            acceptor.acceptMethod(IMappingProvider.Member(it.fullObfuscatedName, method.obfuscatedName, method.obfuscatedDescriptor), method.deobfuscatedName)
-                        }
-                    }
-                }.build()
+                .withMappings(obfToSrg::apply)
+                .build()
 
         println(clientJar)
-        val outputConsumer = OutputConsumerPath.Builder(srgClientJar).build()
-        outputConsumer.addNonClassFiles(clientJar.toPath(), NonClassCopyMode.FIX_META_INF, tinyRemapper)
 
-        tinyRemapper.readInputs(clientJar.toPath())
-        // TODO: Classpath
-        // tinyRemapper.readClassPath()
+        // TR will fail if the srgClientJar exists - Make issue?
+        if (Files.exists(srgClientJar)) {
+            Files.delete(srgClientJar)
+        }
 
-        tinyRemapper.apply(outputConsumer)
-        outputConsumer.close()
-        tinyRemapper.finish()
+        OutputConsumerPath.Builder(srgClientJar).build().use {
+            it.addNonClassFiles(clientJar.toPath(), NonClassCopyMode.FIX_META_INF, tinyRemapper)
+
+            tinyRemapper.readInputs(clientJar.toPath())
+            // TODO: Classpath
+            // tinyRemapper.readClassPath()
+
+            tinyRemapper.apply(it)
+        }.apply {
+            tinyRemapper.finish()
+        }
 
         // Write the mappings to a test file
         //println(file)
@@ -202,6 +158,49 @@ class ForgeJarProcessor (private val project: Project, private val extension: (F
     }
 }
 
+private fun completeMappings(clientJar: File?, vararg mappings: MappingSet) {
+    JarFile(clientJar).use { clientJarFile ->
+        val cascadingInheritanceProvider = CascadingInheritanceProvider()
+        val providers = mutableListOf<ClassProvider>()
+        providers.add(JarFileClassProvider(clientJarFile))
+        cascadingInheritanceProvider.install(ClassProviderInheritanceProvider(ClassProvider { className ->
+            providers.forEach {
+                val bytes: ByteArray? = it.get(className)
+
+                if (bytes != null) {
+                    return@ClassProvider bytes
+                }
+            }
+
+            return@ClassProvider null
+        }))
+
+        // Install JRE classes
+        cascadingInheritanceProvider.install(ReflectionInheritanceProvider(ClassLoader.getSystemClassLoader()))
+
+        val cachingInheritanceProvider = CachingInheritanceProvider(cascadingInheritanceProvider)
+
+        // Iterate through mappings to complete inheritance
+        mappings.forEach {
+            iterateClasses(it) { classMapping ->
+                classMapping.complete(cachingInheritanceProvider)
+            }
+        }
+    }
+}
+
+private fun applySrgMappingHacks(obfToSrg: MappingSet) {
+    // FUCK
+    // So apparently SRG has a class mapping that no longer exists
+    // This does not cause an issue in 1.14.4 (Spunbric remapper v1) but it's an issue in 1.16.2 and 1.16.3
+    // Reflection time it is
+    val topLevelClassesField = obfToSrg.javaClass.getDeclaredField("topLevelClasses")
+    topLevelClassesField.isAccessible = true
+    @Suppress("UNCHECKED_CAST")
+    val topLevelClasses: MutableMap<String, TopLevelClassMapping> = topLevelClassesField.get(obfToSrg) as MutableMap<String, TopLevelClassMapping>
+    topLevelClasses.remove("afd")
+}
+
 internal fun iterateClasses(mappings: MappingSet, action: (ClassMapping<*, *>) -> Unit) {
     mappings.topLevelClassMappings.forEach {
         iterateClass(it, action)
@@ -216,12 +215,8 @@ internal fun iterateClass(classMapping: ClassMapping<*, *>, action: (ClassMappin
     }
 }
 
-private fun generateSrgMappings(stream: InputStream): MappingSet = autoclose(InputStreamReader(stream)) { TSrgReader(it).read() }
-
-private fun <T : AutoCloseable, R : Any> autoclose(closeable: T, tryWithResourcesBlock: (T) -> R): R {
-    val value = tryWithResourcesBlock.invoke(closeable)
-    closeable.close()
-    return value
+private fun createSrgMappings(stream: InputStream) : MappingSet = TSrgReader(InputStreamReader(stream)).use {
+    return it.read()
 }
 
 open class ForgeExtension(private val project: Project) {
