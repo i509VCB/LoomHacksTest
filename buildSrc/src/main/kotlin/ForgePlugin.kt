@@ -10,6 +10,8 @@ import org.cadixdev.bombe.analysis.ReflectionInheritanceProvider
 import org.cadixdev.bombe.asm.analysis.ClassProviderInheritanceProvider
 import org.cadixdev.bombe.asm.jar.ClassProvider
 import org.cadixdev.bombe.asm.jar.JarFileClassProvider
+import org.cadixdev.bombe.type.MethodDescriptor
+import org.cadixdev.bombe.type.signature.MethodSignature
 import org.cadixdev.lorenz.MappingSet
 import org.cadixdev.lorenz.io.srg.tsrg.TSrgReader
 import org.cadixdev.lorenz.model.TopLevelClassMapping
@@ -19,6 +21,7 @@ import java.io.File
 import java.io.InputStream
 import java.io.InputStreamReader
 import java.nio.file.Files
+import java.util.*
 import java.util.jar.JarFile
 import java.util.zip.ZipFile
 
@@ -32,7 +35,7 @@ import java.util.zip.ZipFile
 //  Apply patches
 //  Remap patched jar from srg -> named via srg -> (intermediary -> intermediary) -> named
 //  Yeet old named jar with new one
-class ForgeJarProcessor (private val project: Project, private val extension: (ForgeExtension).() -> Unit) : net.fabricmc.loom.processors.JarProcessor {
+class ForgeJarProcessor(private val project: Project, private val extension: (ForgeExtension).() -> Unit) : net.fabricmc.loom.processors.JarProcessor {
     private lateinit var mcpConfigFile: File
     private lateinit var mcpConfigSpec: McpConfigSpec
     private lateinit var minecraftVersion: String
@@ -78,7 +81,7 @@ class ForgeJarProcessor (private val project: Project, private val extension: (F
         val loomExtension = project.extensions.getByType<LoomGradleExtension>()
 
         if (file == null) {
-            TODO("Proper error")
+            throw RuntimeException("Minecraft jar does not exist?")
         }
 
         project.logger.lifecycle(":generating forge jar")
@@ -90,27 +93,103 @@ class ForgeJarProcessor (private val project: Project, private val extension: (F
         val tinyReader = net.fabricmc.lorenztiny.TinyMappingsReader(mappings, "official", "intermediary")
         val obfToIntermediary = tinyReader.read()
 
-        val mcpConfig = ZipFile(mcpConfigFile)
+        val mcpConfig = ZipFile(mcpConfigFile) // TODO: .use {
         val joinedMappingsEntry = mcpConfig.getEntry(mcpConfigSpec.joinedMappings)
 
         val obfToSrg = createSrgMappings(mcpConfig.getInputStream(joinedMappingsEntry))
+        val staticSrgMethods = mutableListOf<String>()
+        val constructorIds = mutableMapOf<String, MutableList<ConstructorEntry>>()
+
+        // Read static methods
+        Scanner(mcpConfig.getInputStream(mcpConfig.getEntry(mcpConfigSpec.staticMethods))).use {
+            while (it.hasNextLine()) {
+                staticSrgMethods += it.nextLine()
+            }
+        }
+
+        Scanner(mcpConfig.getInputStream(mcpConfig.getEntry(mcpConfigSpec.constructors))).use {
+            var line = 0
+
+            while (it.hasNextLine()) {
+                val parts = it.nextLine().split("\\s+".toRegex())
+
+                if (parts.size != 3) {
+                    throw RuntimeException("Invalid constructor entry at line $line in constructors.txt")
+                }
+
+                if (constructorIds[parts[1]] == null) {
+                    constructorIds[parts[1]] = mutableListOf()
+                }
+
+                constructorIds[parts[1]]?.plusAssign(ConstructorEntry(parts[1], parts[0].toInt(), parts[2]))
+                line++
+            }
+        }
+
         // TODO: Apply parameter names?
-        //  Patches rely on srg param names
+        //  Patches rely on srg param names so we need these
+        //  For later
 
         // Complete inheritance for mappings
         completeMappings(clientJar, obfToIntermediary, obfToSrg)
 
-        // Srg mappings do not have field signatures included, we will generate those by using intermediary
+        // Srg mappings do not have field signatures included, we will generate those by using intermediary's field descriptors
         obfToSrg.addFieldTypeProvider {
             obfToIntermediary.getClassMapping(it.parent.fullObfuscatedName)
                     .flatMap { classMapping -> classMapping.getFieldMapping(it.obfuscatedName) }
                     .flatMap { fieldMapping -> fieldMapping.type }
         }
 
+        // Example: this.func_777777_X(_)(_) -> p_777777_1_
+        obfToSrg.iterateClasses { classMapping ->
+            classMapping.methodMappings.forEach { methodMapping ->
+                val deobfuscatedName = methodMapping.deobfuscatedName
+
+                // Constructors handled seperately
+                if (!deobfuscatedName.startsWith("func_")) {
+                    return@forEach // Ignore weird cases for now
+                }
+
+                // Extract the method id
+                val methodId = deobfuscatedName.replace("\\D+".toRegex(), "")
+
+                for (index: Int in methodMapping.signature.descriptor.paramTypes.indices) {
+                    methodMapping.createParameterMapping(index, "p_${methodId}_${index}_")
+                }
+            }
+        }
+
+        val srgToObf = obfToSrg.reverse()
+
+        // SRG does not have constructor mappings, so we need to assemble these for their param names
+        obfToSrg.iterateClasses { classMapping ->
+            constructorIds[classMapping.fullDeobfuscatedName]?.forEach { ctor ->
+                // Descriptor from `constructors.txt` is deobfuscated, we need to obfuscate it
+                val obfuscatedDescriptor = srgToObf.deobfuscate(MethodDescriptor.of(ctor.descriptor))
+                val ctorMapping = classMapping.createMethodMapping(MethodSignature.of("<init>", obfuscatedDescriptor.toString()))
+
+                // Create parameter mappings
+                for (index: Int in ctorMapping.signature.descriptor.paramTypes.indices) {
+                    ctorMapping.createParameterMapping(index, "p_i${ctor.id}_${index}_")
+                }
+            }
+
+            if (classMapping.deobfuscatedName.contains("Minecraft")) {
+                println(classMapping.deobfuscatedName)
+                classMapping.methodMappings.forEach {
+                    if (it.obfuscatedName == "<init>") {
+                        it.parameterMappings.forEach { param ->
+                            println("${param.index} - ${param.deobfuscatedName}")
+                        }
+                    }
+                }
+            }
+        }
+
         applySrgMappingHacks(obfToSrg)
 
         // Make srg -> intermediary mappings
-        val srgToIntermediary = obfToSrg.reverse().merge(obfToIntermediary)
+        val srgToIntermediary = srgToObf.merge(obfToIntermediary)
 
         val srgClientJar = clientJar.absoluteFile.parentFile.toPath().resolve("minecraft-$minecraftVersion-srg-mapped.jar")
         val tinyRemapper = TinyRemapper.newRemapper()
@@ -121,19 +200,16 @@ class ForgeJarProcessor (private val project: Project, private val extension: (F
 
         println(clientJar)
 
-        // TR will fail if the srgClientJar exists - Make issue?
+        // TR will fail if the srgClientJar exists - TODO: Make an issue?
         if (Files.exists(srgClientJar)) {
             Files.delete(srgClientJar)
         }
 
-        OutputConsumerPath.Builder(srgClientJar).build().use {
-            it.addNonClassFiles(clientJar.toPath(), NonClassCopyMode.FIX_META_INF, tinyRemapper)
+        OutputConsumerPath.Builder(srgClientJar).build().use { outputConsumer ->
+            outputConsumer.addNonClassFiles(clientJar.toPath(), NonClassCopyMode.FIX_META_INF, tinyRemapper)
 
             tinyRemapper.readInputs(clientJar.toPath())
-            // TODO: Classpath
-            // tinyRemapper.readClassPath()
-
-            tinyRemapper.apply(it)
+            tinyRemapper.apply(outputConsumer)
         }.apply {
             tinyRemapper.finish()
         }
@@ -162,6 +238,8 @@ private fun completeMappings(clientJar: File?, vararg mappings: MappingSet) {
         val cascadingInheritanceProvider = CascadingInheritanceProvider()
         val providers = mutableListOf<ClassProvider>()
         providers.add(JarFileClassProvider(clientJarFile))
+
+        // Use client jar for context when calculating inheritance
         cascadingInheritanceProvider.install(ClassProviderInheritanceProvider(ClassProvider { className ->
             providers.forEach {
                 val bytes: ByteArray? = it.get(className)
@@ -189,10 +267,9 @@ private fun completeMappings(clientJar: File?, vararg mappings: MappingSet) {
 }
 
 private fun applySrgMappingHacks(obfToSrg: MappingSet) {
-    // FUCK
     // So apparently SRG has a class mapping that no longer exists
-    // This does not cause an issue in 1.14.4 (Spunbric remapper v1) but it's an issue in 1.16.2 and 1.16.3
-    // Reflection time it is
+    // Supposedly "intended" per this issue: https://github.com/MinecraftForge/MCPConfig/issues/125
+    // So we use reflection to remove the entry
     val topLevelClassesField = obfToSrg.javaClass.getDeclaredField("topLevelClasses")
     topLevelClassesField.isAccessible = true
     @Suppress("UNCHECKED_CAST")
@@ -200,9 +277,7 @@ private fun applySrgMappingHacks(obfToSrg: MappingSet) {
     topLevelClasses.remove("afd")
 }
 
-private fun createSrgMappings(stream: InputStream) : MappingSet = TSrgReader(InputStreamReader(stream)).use {
-    return it.read()
-}
+private fun createSrgMappings(stream: InputStream) : MappingSet = TSrgReader(InputStreamReader(stream)).use { it.read() }
 
 open class ForgeExtension(private val project: Project) {
     lateinit var forgeVersion: String

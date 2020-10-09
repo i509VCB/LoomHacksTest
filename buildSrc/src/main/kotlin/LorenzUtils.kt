@@ -2,7 +2,7 @@ import net.fabricmc.tinyremapper.IMappingProvider
 import org.cadixdev.lorenz.MappingSet
 import org.cadixdev.lorenz.model.ClassMapping
 
-internal fun MappingSet.iterateClasses(action: (ClassMapping<*, *>) -> Unit) {
+fun MappingSet.iterateClasses(action: (ClassMapping<*, *>) -> Unit) {
     topLevelClassMappings.forEach {
         iterateClass(it, action)
     }
@@ -28,7 +28,7 @@ internal fun MappingSet.apply(mappingAcceptor: IMappingProvider.MappingAcceptor)
     }
 }
 
-internal fun MappingSet.apply(mappingAcceptor: IMappingProvider.MappingAcceptor, strict: Boolean, invalidFieldHandler: (List<MissingFieldEntry>) -> Unit = {}) {
+internal fun MappingSet.apply(mappingAcceptor: IMappingProvider.MappingAcceptor, strict: Boolean, invalidFieldHandler: (List<MissingFieldEntry>) -> Unit = { }) {
     // Validate all fields have field types per tiny spec.
     if (strict) {
         val fieldsWithMissingSignatures = findFieldsMissingSignature()
@@ -53,6 +53,10 @@ internal fun MappingSet.apply(mappingAcceptor: IMappingProvider.MappingAcceptor,
 
         it.methodMappings.forEach { method ->
             mappingAcceptor.acceptMethod(IMappingProvider.Member(it.fullObfuscatedName, method.obfuscatedName, method.obfuscatedDescriptor), method.deobfuscatedName)
+
+            method.parameterMappings.forEach { parameter ->
+                mappingAcceptor.acceptMethodArg(IMappingProvider.Member(it.fullObfuscatedName, method.obfuscatedName, method.obfuscatedDescriptor), parameter.index, parameter.deobfuscatedName)
+            }
         }
     }
 }
@@ -72,3 +76,5 @@ internal fun MappingSet.findFieldsMissingSignature() : List<MissingFieldEntry> {
 }
 
 internal data class MissingFieldEntry(val obfuscatedFieldName: String, val deobfuscatedFieldName: String, val obfuscatedClassName: String, val deobfuscatedClassName: String)
+
+internal data class ConstructorEntry(val owner: String, val id: Int, val descriptor: String)

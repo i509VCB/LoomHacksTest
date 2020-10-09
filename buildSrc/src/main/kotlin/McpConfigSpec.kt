@@ -36,15 +36,36 @@ private fun readV1Spec(json: JsonObject) : McpConfigSpecV1 {
         throw RuntimeException()
     }
 
-    return McpConfigSpecV1(mappings, patches.getAsJsonPrimitive("joined").asString!!)
+    val joinedPatchesLocation = patches.getAsJsonPrimitive("joined").asString!!
+
+    if (!data.has("statics")) {
+        throw RuntimeException()
+    }
+
+    val staticMethods = data.getAsJsonPrimitive("statics").asString!!
+
+    if (!data.has("constructors")) {
+        throw RuntimeException()
+    }
+
+    val constructors = data.getAsJsonPrimitive("constructors").asString!!
+
+    return McpConfigSpecV1(mappings, joinedPatchesLocation, staticMethods, constructors)
 }
 
 internal interface McpConfigSpec {
     val version: Int
     val joinedMappings: String
     val joinedPatches: String
+    val staticMethods: String
+    val constructors: String
 }
 
-private data class McpConfigSpecV1(override val joinedMappings: String, override val joinedPatches: String) : McpConfigSpec {
+private data class McpConfigSpecV1(
+        override val joinedMappings: String,
+        override val joinedPatches: String,
+        override val staticMethods: String,
+        override val constructors: String
+) : McpConfigSpec {
     override val version: Int = 1
 }
