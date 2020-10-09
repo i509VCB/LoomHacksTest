@@ -24,7 +24,7 @@ class TinyV2MappingsWriter(writer: Writer?, private val obfNamespace: String, pr
         writer.print(obfNamespace)
 
         // Write our first class entry
-        iterateClasses(mappings) { classMapping ->
+        mappings.iterateClasses { classMapping ->
             writer.println() // Always NL before next class
             writer.print("c") // Class
             printTab()

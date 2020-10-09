@@ -12,7 +12,6 @@ import org.cadixdev.bombe.asm.jar.ClassProvider
 import org.cadixdev.bombe.asm.jar.JarFileClassProvider
 import org.cadixdev.lorenz.MappingSet
 import org.cadixdev.lorenz.io.srg.tsrg.TSrgReader
-import org.cadixdev.lorenz.model.ClassMapping
 import org.cadixdev.lorenz.model.TopLevelClassMapping
 import org.gradle.api.Project
 import org.gradle.kotlin.dsl.getByType
@@ -182,7 +181,7 @@ private fun completeMappings(clientJar: File?, vararg mappings: MappingSet) {
 
         // Iterate through mappings to complete inheritance
         mappings.forEach {
-            iterateClasses(it) { classMapping ->
+            it.iterateClasses { classMapping ->
                 classMapping.complete(cachingInheritanceProvider)
             }
         }
@@ -199,20 +198,6 @@ private fun applySrgMappingHacks(obfToSrg: MappingSet) {
     @Suppress("UNCHECKED_CAST")
     val topLevelClasses: MutableMap<String, TopLevelClassMapping> = topLevelClassesField.get(obfToSrg) as MutableMap<String, TopLevelClassMapping>
     topLevelClasses.remove("afd")
-}
-
-internal fun iterateClasses(mappings: MappingSet, action: (ClassMapping<*, *>) -> Unit) {
-    mappings.topLevelClassMappings.forEach {
-        iterateClass(it, action)
-    }
-}
-
-internal fun iterateClass(classMapping: ClassMapping<*, *>, action: (ClassMapping<*, *>) -> Unit) {
-    action.invoke(classMapping)
-
-    classMapping.innerClassMappings.forEach {
-        iterateClass(it, action)
-    }
 }
 
 private fun createSrgMappings(stream: InputStream) : MappingSet = TSrgReader(InputStreamReader(stream)).use {

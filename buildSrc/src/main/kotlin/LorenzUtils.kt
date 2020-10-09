@@ -1,5 +1,20 @@
 import net.fabricmc.tinyremapper.IMappingProvider
 import org.cadixdev.lorenz.MappingSet
+import org.cadixdev.lorenz.model.ClassMapping
+
+internal fun MappingSet.iterateClasses(action: (ClassMapping<*, *>) -> Unit) {
+    topLevelClassMappings.forEach {
+        iterateClass(it, action)
+    }
+}
+
+private fun iterateClass(classMapping: ClassMapping<*, *>, action: (ClassMapping<*, *>) -> Unit) {
+    action.invoke(classMapping)
+
+    classMapping.innerClassMappings.forEach {
+        iterateClass(it, action)
+    }
+}
 
 internal fun MappingSet.apply(mappingAcceptor: IMappingProvider.MappingAcceptor) {
     apply(mappingAcceptor, true) {
@@ -23,7 +38,7 @@ internal fun MappingSet.apply(mappingAcceptor: IMappingProvider.MappingAcceptor,
         }
     }
 
-    iterateClasses(this) {
+    iterateClasses {
         mappingAcceptor.acceptClass(it.fullObfuscatedName, it.fullDeobfuscatedName)
 
         it.fieldMappings.forEach { field ->
@@ -45,7 +60,7 @@ internal fun MappingSet.apply(mappingAcceptor: IMappingProvider.MappingAcceptor,
 internal fun MappingSet.findFieldsMissingSignature() : List<MissingFieldEntry> {
     val missing = mutableListOf<MissingFieldEntry>()
 
-    iterateClasses(this) { classMapping ->
+    iterateClasses { classMapping ->
         classMapping.fieldMappings.forEach { field ->
             if (!field.type.isPresent) {
                 missing += MissingFieldEntry(field.obfuscatedName, field.deobfuscatedName, classMapping.fullObfuscatedName, classMapping.fullDeobfuscatedName)
