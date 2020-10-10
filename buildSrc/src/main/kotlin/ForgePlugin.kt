@@ -19,7 +19,6 @@ import org.cadixdev.lorenz.model.TopLevelClassMapping
 import org.gradle.api.Project
 import org.gradle.kotlin.dsl.getByType
 import java.io.File
-import java.io.FileWriter
 import java.io.InputStream
 import java.io.InputStreamReader
 import java.nio.file.Files
@@ -109,38 +108,42 @@ class ForgeJarProcessor(private val project: Project, private val extension: (Fo
         val tinyReader = net.fabricmc.lorenztiny.TinyMappingsReader(mappings, "official", "intermediary")
         val obfToIntermediary = tinyReader.read()
 
-        val mcpConfig = ZipFile(mcpConfigFile) // TODO: .use {
-        val joinedMappingsEntry = mcpConfig.getEntry(mcpConfigSpec.joinedMappings)
-
-        val obfToSrg = createSrgMappings(mcpConfig.getInputStream(joinedMappingsEntry))
         val staticSrgMethods = mutableListOf<String>()
         val constructorIds = mutableMapOf<String, MutableList<ConstructorEntry>>()
+        var tmpSrg: MappingSet? = null
 
-        // Read static methods
-        Scanner(mcpConfig.getInputStream(mcpConfig.getEntry(mcpConfigSpec.staticMethods))).use {
-            while (it.hasNextLine()) {
-                staticSrgMethods += it.nextLine()
+        ZipFile(mcpConfigFile).use { mcpConfig ->
+            val joinedMappingsEntry = mcpConfig.getEntry(mcpConfigSpec.joinedMappings)
+            tmpSrg = createSrgMappings(mcpConfig.getInputStream(joinedMappingsEntry))
+
+            // Read static methods
+            Scanner(mcpConfig.getInputStream(mcpConfig.getEntry(mcpConfigSpec.staticMethods))).use {
+                while (it.hasNextLine()) {
+                    staticSrgMethods += it.nextLine()
+                }
+            }
+
+            Scanner(mcpConfig.getInputStream(mcpConfig.getEntry(mcpConfigSpec.constructors))).use {
+                var line = 0
+
+                while (it.hasNextLine()) {
+                    val parts = it.nextLine().split("\\s+".toRegex())
+
+                    if (parts.size != 3) {
+                        throw RuntimeException("Invalid constructor entry at line $line in constructors.txt")
+                    }
+
+                    if (constructorIds[parts[1]] == null) {
+                        constructorIds[parts[1]] = mutableListOf()
+                    }
+
+                    constructorIds[parts[1]]?.plusAssign(ConstructorEntry(parts[1], parts[0].toInt(), parts[2]))
+                    line++
+                }
             }
         }
 
-        Scanner(mcpConfig.getInputStream(mcpConfig.getEntry(mcpConfigSpec.constructors))).use {
-            var line = 0
-
-            while (it.hasNextLine()) {
-                val parts = it.nextLine().split("\\s+".toRegex())
-
-                if (parts.size != 3) {
-                    throw RuntimeException("Invalid constructor entry at line $line in constructors.txt")
-                }
-
-                if (constructorIds[parts[1]] == null) {
-                    constructorIds[parts[1]] = mutableListOf()
-                }
-
-                constructorIds[parts[1]]?.plusAssign(ConstructorEntry(parts[1], parts[0].toInt(), parts[2]))
-                line++
-            }
-        }
+        val obfToSrg = tmpSrg!!
 
         // TODO: Apply parameter names?
         //  Patches rely on srg param names so we need these
@@ -207,6 +210,7 @@ class ForgeJarProcessor(private val project: Project, private val extension: (Fo
         }
 
         project.logger.lifecycle(":remapping minecraft (TinyRemapper, official -> srg)")
+
         OutputConsumerPath.Builder(srgClientJar).build().use { outputConsumer ->
             outputConsumer.addNonClassFiles(clientJar.toPath(), NonClassCopyMode.FIX_META_INF, tinyRemapper)
 
@@ -223,7 +227,38 @@ class ForgeJarProcessor(private val project: Project, private val extension: (Fo
         //}
 
         project.logger.lifecycle(":preparing minecraft forge patches")
-        //Patcher()
+
+        JarFile(forgeInstallerFile).use { jarFile ->
+            // Patches are ZIP in LZMA
+            val clientPatches = jarFile.getJarEntry("data/client.lzma")
+
+            val createTempFile = Files.createTempFile("clientPatches", ".lzma")
+
+            println(createTempFile)
+
+            Files.newOutputStream(createTempFile).use { out ->
+                var read: Int
+                val bytes = ByteArray(1024)
+
+                jarFile.getInputStream(clientPatches).use { `in` ->
+                    while (`in`.read(bytes).also { read = it } != -1) {
+                        out.write(bytes, 0, read)
+                    }
+                }
+            }
+
+            println(clientPatches)
+
+            val output = File(srgClientJar.toFile().parentFile, "$minecraftVersion-forge-srg.jar")
+            output.delete()
+            output.createNewFile()
+
+            val patcher = Patcher(srgClientJar.toFile(), output)//.keepData(true)
+            patcher.loadPatches(createTempFile.toFile(), null)
+
+            // Patches always fail due to checksum mismatch?
+            patcher.process()
+        }
 
         // Make srg -> intermediary mappings
         val srgToIntermediary = srgToObf.merge(obfToIntermediary)
