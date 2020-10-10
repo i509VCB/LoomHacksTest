@@ -27,20 +27,19 @@ import java.util.jar.JarFile
 import java.util.zip.ZipFile
 
 // dependencies?
-// binarypatcher - ConsoleTool
 
 // TODO: Process
 //  Generate official -> srg ---- Done
 //  Generate intermediary -> srg via intermediary -> (official -> official) -> srg ---- Done
 //  Create official -> srg jar ---- Done
-//  Apply patches
+//  Apply patches -
+//   Require use of source patches since binpatching will never work
 //  Remap patched jar from srg -> named via srg -> (intermediary -> intermediary) -> named
 //  Yeet old named jar with new one
 class ForgeJarProcessor(private val project: Project, private val extension: (ForgeExtension).() -> Unit) : net.fabricmc.loom.processors.JarProcessor {
     private lateinit var mcpConfigFile: File
     private lateinit var mcpConfigSpec: McpConfigSpec
     private lateinit var minecraftVersion: String
-    private lateinit var forgeInstallerFile: File
 
     override fun setup() {
         val forgeExtension = ForgeExtension(project)
@@ -71,23 +70,6 @@ class ForgeJarProcessor(private val project: Project, private val extension: (Fo
 
                 mcpConfigSpec = readSpec(GSON.fromJson(InputStreamReader(it.getInputStream(config)), JsonObject::class.java))
             }
-        }
-
-        val installerDependency = "$FORGE$minecraftVersion-${forgeExtension.forgeVersion}:$INSTALLER"
-
-        // Resolve Forge installer, we will extract the patches and universal jar from there
-        val forgeInstallerConfig = project.configurations.maybeCreate(FORGE_INSTALLER_CONFIG)
-        project.dependencies.add(FORGE_INSTALLER_CONFIG, installerDependency)
-        val forgeInstaller = forgeInstallerConfig.resolve()
-
-        println(forgeInstaller)
-
-        if (forgeInstaller.isEmpty() || forgeInstaller.size > 1) {
-            throw IllegalArgumentException("Forge installer could not be found");
-        }
-
-        forgeInstaller.forEach { file ->
-            forgeInstallerFile = file
         }
     }
 
@@ -228,40 +210,9 @@ class ForgeJarProcessor(private val project: Project, private val extension: (Fo
 
         project.logger.lifecycle(":preparing minecraft forge patches")
 
-        JarFile(forgeInstallerFile).use { jarFile ->
-            // Patches are ZIP in LZMA
-            val clientPatches = jarFile.getJarEntry("data/client.lzma")
-
-            val createTempFile = Files.createTempFile("clientPatches", ".lzma")
-
-            println(createTempFile)
-
-            Files.newOutputStream(createTempFile).use { out ->
-                var read: Int
-                val bytes = ByteArray(1024)
-
-                jarFile.getInputStream(clientPatches).use { `in` ->
-                    while (`in`.read(bytes).also { read = it } != -1) {
-                        out.write(bytes, 0, read)
-                    }
-                }
-            }
-
-            println(clientPatches)
-
-            val output = File(srgClientJar.toFile().parentFile, "$minecraftVersion-forge-srg.jar")
-            output.delete()
-            output.createNewFile()
-
-            //val patcher = Patcher(srgClientJar.toFile(), output)//.keepData(true)
-            //patcher.loadPatches(createTempFile.toFile(), null)
-
-            // Patches always fail due to checksum mismatch?
-            //patcher.process()
-        }
-
         // Make srg -> intermediary mappings
         val srgToIntermediary = srgToObf.merge(obfToIntermediary)
+
         /*
          * TODO: remap the client jar obf -> srg ---- Done
          * TODO: decompile srg jar
