@@ -1,4 +1,5 @@
 import net.fabricmc.tinyremapper.IMappingProvider
+import org.cadixdev.bombe.type.BaseType
 import org.cadixdev.lorenz.MappingSet
 import org.cadixdev.lorenz.model.ClassMapping
 
@@ -16,8 +17,8 @@ private fun iterateClass(classMapping: ClassMapping<*, *>, action: (ClassMapping
     }
 }
 
-internal fun MappingSet.apply(mappingAcceptor: IMappingProvider.MappingAcceptor) {
-    apply(mappingAcceptor, true) {
+internal fun MappingSet.apply(mappingAcceptor: IMappingProvider.MappingAcceptor, staticMethods: List<String>) {
+    apply(mappingAcceptor, true, staticMethods) {
         val exception: Exception = RuntimeException("Cannot apply mapping set to mapping acceptor due to missing field mappings:")
 
         it.forEach { entry ->
@@ -28,7 +29,12 @@ internal fun MappingSet.apply(mappingAcceptor: IMappingProvider.MappingAcceptor)
     }
 }
 
-internal fun MappingSet.apply(mappingAcceptor: IMappingProvider.MappingAcceptor, strict: Boolean, invalidFieldHandler: (List<MissingFieldEntry>) -> Unit = { }) {
+internal fun MappingSet.apply(
+        mappingAcceptor: IMappingProvider.MappingAcceptor,
+        strict: Boolean,
+        staticMethods: List<String>,
+        invalidFieldHandler: (List<MissingFieldEntry>) -> Unit = { }
+) {
     // Validate all fields have field types per tiny spec.
     if (strict) {
         val fieldsWithMissingSignatures = findFieldsMissingSignature()
@@ -54,8 +60,21 @@ internal fun MappingSet.apply(mappingAcceptor: IMappingProvider.MappingAcceptor,
         it.methodMappings.forEach { method ->
             mappingAcceptor.acceptMethod(IMappingProvider.Member(it.fullObfuscatedName, method.obfuscatedName, method.obfuscatedDescriptor), method.deobfuscatedName)
 
+            var lvtIndex = 0
+
+            if (!staticMethods.contains(method.deobfuscatedName)) {
+                lvtIndex++
+            }
+
+            val paramTypes = method.descriptor.paramTypes
             method.parameterMappings.forEach { parameter ->
-                mappingAcceptor.acceptMethodArg(IMappingProvider.Member(it.fullObfuscatedName, method.obfuscatedName, method.obfuscatedDescriptor), parameter.index, parameter.deobfuscatedName)
+                mappingAcceptor.acceptMethodArg(IMappingProvider.Member(it.fullObfuscatedName, method.obfuscatedName, method.obfuscatedDescriptor), lvtIndex, parameter.deobfuscatedName)
+
+                when (paramTypes[parameter.index]) {
+                    // Consider the fact Longs and Doubles take up two spaces on LVT
+                    BaseType.DOUBLE, BaseType.LONG -> lvtIndex += 2
+                    else -> lvtIndex++
+                }
             }
         }
     }

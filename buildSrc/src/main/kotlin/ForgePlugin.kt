@@ -1,6 +1,7 @@
 import com.google.gson.Gson
 import com.google.gson.JsonObject
 import net.fabricmc.loom.LoomGradleExtension
+import net.fabricmc.tinyremapper.IMappingProvider
 import net.fabricmc.tinyremapper.NonClassCopyMode
 import net.fabricmc.tinyremapper.OutputConsumerPath
 import net.fabricmc.tinyremapper.TinyRemapper
@@ -140,6 +141,8 @@ class ForgeJarProcessor(private val project: Project, private val extension: (Fo
                     .flatMap { fieldMapping -> fieldMapping.type }
         }
 
+        val srgToObf = obfToSrg.reverse()
+
         // Example: this.func_777777_X(_)(_) -> p_777777_1_
         obfToSrg.iterateClasses { classMapping ->
             classMapping.methodMappings.forEach { methodMapping ->
@@ -158,8 +161,6 @@ class ForgeJarProcessor(private val project: Project, private val extension: (Fo
                 }
             }
         }
-
-        val srgToObf = obfToSrg.reverse()
 
         // SRG does not have constructor mappings, so we need to assemble these for their param names
         obfToSrg.iterateClasses { classMapping ->
@@ -195,7 +196,9 @@ class ForgeJarProcessor(private val project: Project, private val extension: (Fo
         val tinyRemapper = TinyRemapper.newRemapper()
                 .ignoreConflicts(true) // The mappings process isn't perfect, it requires a little slack with conflicts
                 .fixPackageAccess(true)
-                .withMappings(obfToSrg::apply)
+                .withMappings {
+                    obfToSrg.apply(it, staticSrgMethods)
+                }
                 .build()
 
         println(clientJar)
@@ -205,6 +208,7 @@ class ForgeJarProcessor(private val project: Project, private val extension: (Fo
             Files.delete(srgClientJar)
         }
 
+        project.logger.lifecycle(":remapping minecraft (TinyRemapper, official -> srg)")
         OutputConsumerPath.Builder(srgClientJar).build().use { outputConsumer ->
             outputConsumer.addNonClassFiles(clientJar.toPath(), NonClassCopyMode.FIX_META_INF, tinyRemapper)
 
