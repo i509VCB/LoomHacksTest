@@ -253,11 +253,11 @@ class ForgeJarProcessor(private val project: Project, private val extension: (Fo
             output.delete()
             output.createNewFile()
 
-            val patcher = Patcher(srgClientJar.toFile(), output)//.keepData(true)
-            patcher.loadPatches(createTempFile.toFile(), null)
+            //val patcher = Patcher(srgClientJar.toFile(), output)//.keepData(true)
+            //patcher.loadPatches(createTempFile.toFile(), null)
 
             // Patches always fail due to checksum mismatch?
-            patcher.process()
+            //patcher.process()
         }
 
         // Make srg -> intermediary mappings
