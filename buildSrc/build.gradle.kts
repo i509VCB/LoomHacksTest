@@ -29,4 +29,7 @@ dependencies {
         isTransitive = false
     }
     implementation("org.cadixdev:lorenz-asm:0.5.2")
+
+    // Specific dependencies
+    implementation("net.minecraftforge:binarypatcher:1.+:fatjar")
 }

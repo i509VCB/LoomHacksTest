@@ -1,10 +1,10 @@
 import com.google.gson.Gson
 import com.google.gson.JsonObject
 import net.fabricmc.loom.LoomGradleExtension
-import net.fabricmc.tinyremapper.IMappingProvider
 import net.fabricmc.tinyremapper.NonClassCopyMode
 import net.fabricmc.tinyremapper.OutputConsumerPath
 import net.fabricmc.tinyremapper.TinyRemapper
+import net.minecraftforge.binarypatcher.Patcher
 import org.cadixdev.bombe.analysis.CachingInheritanceProvider
 import org.cadixdev.bombe.analysis.CascadingInheritanceProvider
 import org.cadixdev.bombe.analysis.ReflectionInheritanceProvider
@@ -41,7 +41,7 @@ class ForgeJarProcessor(private val project: Project, private val extension: (Fo
     private lateinit var mcpConfigFile: File
     private lateinit var mcpConfigSpec: McpConfigSpec
     private lateinit var minecraftVersion: String
-    private lateinit var forgeDependencyNotation: String
+    private lateinit var forgeInstallerFile: File
 
     override fun setup() {
         val forgeExtension = ForgeExtension(project)
@@ -52,12 +52,11 @@ class ForgeJarProcessor(private val project: Project, private val extension: (Fo
 
         // So some early setup, we need to figure out what version of Minecraft and the version of forge we want to use
         minecraftVersion = loomExtension.minecraftProvider.minecraftVersion
-        forgeDependencyNotation = "$FORGE$minecraftVersion-${forgeExtension.forgeVersion}"
 
         // Resolve MCPConfig
-        val dummyConfig = project.configurations.maybeCreate(MCP_CONFIG_CONFIGURATION)
+        val mcpConfigConfig = project.configurations.maybeCreate(MCP_CONFIG_CONFIGURATION)
         project.dependencies.add(MCP_CONFIG_CONFIGURATION, "$MCP_CONFIG$minecraftVersion")
-        val mcpConfig = dummyConfig.resolve()
+        val mcpConfig = mcpConfigConfig.resolve()
 
         if (mcpConfig.isEmpty() || mcpConfig.size > 1) {
             throw IllegalArgumentException("MCP Config could not be found");
@@ -75,7 +74,22 @@ class ForgeJarProcessor(private val project: Project, private val extension: (Fo
             }
         }
 
-        // TODO: resolve forge patches
+        val installerDependency = "$FORGE$minecraftVersion-${forgeExtension.forgeVersion}:$INSTALLER"
+
+        // Resolve Forge installer, we will extract the patches and universal jar from there
+        val forgeInstallerConfig = project.configurations.maybeCreate(FORGE_INSTALLER_CONFIG)
+        project.dependencies.add(FORGE_INSTALLER_CONFIG, installerDependency)
+        val forgeInstaller = forgeInstallerConfig.resolve()
+
+        println(forgeInstaller)
+
+        if (forgeInstaller.isEmpty() || forgeInstaller.size > 1) {
+            throw IllegalArgumentException("Forge installer could not be found");
+        }
+
+        forgeInstaller.forEach { file ->
+            forgeInstallerFile = file
+        }
     }
 
     // The file jar produced by this MUST be named
@@ -145,7 +159,7 @@ class ForgeJarProcessor(private val project: Project, private val extension: (Fo
         applySrgMappingHacks(obfToSrg)
         val srgToObf = obfToSrg.reverse()
 
-        // Example: this.func_777777_(X(_)) -> p_777777_1_
+        // Example: this.func_777777_(X) -> p_777777_1_
         obfToSrg.iterateClasses { classMapping ->
             classMapping.methodMappings.forEach { methodMapping ->
                 val deobfuscatedName = methodMapping.deobfuscatedName
@@ -202,14 +216,17 @@ class ForgeJarProcessor(private val project: Project, private val extension: (Fo
             tinyRemapper.finish()
         }
 
+        // Write the mappings to a test file
+        //println(file)
+        //TinyV2MappingsWriter(FileWriter(File(file.parent, "test.tiny")), "srg", "intermediary").use {
+        //    it.write(srgToIntermediary)
+        //}
+
+        project.logger.lifecycle(":preparing minecraft forge patches")
+        //Patcher()
+
         // Make srg -> intermediary mappings
         val srgToIntermediary = srgToObf.merge(obfToIntermediary)
-
-        // Write the mappings to a test file
-        println(file)
-        TinyV2MappingsWriter(FileWriter(File(file.parent, "test.tiny")), "srg", "intermediary").use {
-            it.write(srgToIntermediary)
-        }
         /*
          * TODO: remap the client jar obf -> srg ---- Done
          * TODO: decompile srg jar

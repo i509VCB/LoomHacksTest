@@ -56,13 +56,15 @@ internal fun MappingSet.apply(
         it.methodMappings.forEach { method ->
             mappingAcceptor.acceptMethod(IMappingProvider.Member(it.fullObfuscatedName, method.obfuscatedName, method.obfuscatedDescriptor), method.deobfuscatedName)
 
+            // Lorenz gives you the asm index but TR wants the LVT index, so we convert it
             var lvtIndex = 0
 
             if (!staticMethods.contains(method.deobfuscatedName)) {
-                lvtIndex++
+                lvtIndex++ // Offset by 1 for instance methods, since `this` is entry 0
             }
 
             val paramTypes = method.descriptor.paramTypes
+
             method.parameterMappings.forEach { parameter ->
                 mappingAcceptor.acceptMethodArg(IMappingProvider.Member(it.fullObfuscatedName, method.obfuscatedName, method.obfuscatedDescriptor), lvtIndex, parameter.deobfuscatedName)
 

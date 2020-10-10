@@ -34,6 +34,6 @@ configure<JavaPluginConvention> {
 
 loom {
     addJarProcessor(ForgeJarProcessor(project) {
-        forgeVersion = "33.0.3"
+        forgeVersion = "34.1.16"
     })
 }
