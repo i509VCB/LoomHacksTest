@@ -174,17 +174,6 @@ class ForgeJarProcessor(private val project: Project, private val extension: (Fo
                     ctorMapping.createParameterMapping(index, "p_i${ctor.id}_${index}_")
                 }
             }
-
-            if (classMapping.deobfuscatedName.contains("Minecraft")) {
-                println(classMapping.deobfuscatedName)
-                classMapping.methodMappings.forEach {
-                    if (it.obfuscatedName == "<init>") {
-                        it.parameterMappings.forEach { param ->
-                            println("${param.index} - ${param.deobfuscatedName}")
-                        }
-                    }
-                }
-            }
         }
 
         applySrgMappingHacks(obfToSrg)
