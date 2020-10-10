@@ -17,23 +17,19 @@ private fun iterateClass(classMapping: ClassMapping<*, *>, action: (ClassMapping
     }
 }
 
-internal fun MappingSet.apply(mappingAcceptor: IMappingProvider.MappingAcceptor, staticMethods: List<String>) {
-    apply(mappingAcceptor, true, staticMethods) {
-        val exception: Exception = RuntimeException("Cannot apply mapping set to mapping acceptor due to missing field mappings:")
-
-        it.forEach { entry ->
-            exception.addSuppressed(RuntimeException("Field \"${entry.obfuscatedFieldName} -> ${entry.deobfuscatedFieldName}\" in class \"${entry.obfuscatedClassName} -> ${entry.deobfuscatedClassName}\""))
-        }
-
-        throw exception
-    }
-}
-
 internal fun MappingSet.apply(
         mappingAcceptor: IMappingProvider.MappingAcceptor,
-        strict: Boolean,
         staticMethods: List<String>,
-        invalidFieldHandler: (List<MissingFieldEntry>) -> Unit = { }
+        strict: Boolean = true,
+        invalidFieldHandler: (List<MissingFieldEntry>) -> Unit = {
+            val exception: Exception = RuntimeException("Cannot apply mapping set to mapping acceptor due to missing field mappings:")
+
+            it.forEach { entry ->
+                exception.addSuppressed(RuntimeException("Field \"${entry.obfuscatedFieldName} -> ${entry.deobfuscatedFieldName}\" in class \"${entry.obfuscatedClassName} -> ${entry.deobfuscatedClassName}\""))
+            }
+
+            throw exception
+        }
 ) {
     // Validate all fields have field types per tiny spec.
     if (strict) {

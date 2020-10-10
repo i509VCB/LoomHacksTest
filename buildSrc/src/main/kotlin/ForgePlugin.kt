@@ -19,6 +19,7 @@ import org.cadixdev.lorenz.model.TopLevelClassMapping
 import org.gradle.api.Project
 import org.gradle.kotlin.dsl.getByType
 import java.io.File
+import java.io.FileWriter
 import java.io.InputStream
 import java.io.InputStreamReader
 import java.nio.file.Files
@@ -141,9 +142,10 @@ class ForgeJarProcessor(private val project: Project, private val extension: (Fo
                     .flatMap { fieldMapping -> fieldMapping.type }
         }
 
+        applySrgMappingHacks(obfToSrg)
         val srgToObf = obfToSrg.reverse()
 
-        // Example: this.func_777777_X(_)(_) -> p_777777_1_
+        // Example: this.func_777777_(X(_)) -> p_777777_1_
         obfToSrg.iterateClasses { classMapping ->
             classMapping.methodMappings.forEach { methodMapping ->
                 val deobfuscatedName = methodMapping.deobfuscatedName
@@ -176,18 +178,11 @@ class ForgeJarProcessor(private val project: Project, private val extension: (Fo
             }
         }
 
-        applySrgMappingHacks(obfToSrg)
-
-        // Make srg -> intermediary mappings
-        val srgToIntermediary = srgToObf.merge(obfToIntermediary)
-
         val srgClientJar = clientJar.absoluteFile.parentFile.toPath().resolve("minecraft-$minecraftVersion-srg-mapped.jar")
         val tinyRemapper = TinyRemapper.newRemapper()
                 .ignoreConflicts(true) // The mappings process isn't perfect, it requires a little slack with conflicts
                 .fixPackageAccess(true)
-                .withMappings {
-                    obfToSrg.apply(it, staticSrgMethods)
-                }
+                .withMappings { obfToSrg.apply(it, staticSrgMethods) }
                 .build()
 
         println(clientJar)
@@ -207,10 +202,14 @@ class ForgeJarProcessor(private val project: Project, private val extension: (Fo
             tinyRemapper.finish()
         }
 
+        // Make srg -> intermediary mappings
+        val srgToIntermediary = srgToObf.merge(obfToIntermediary)
+
         // Write the mappings to a test file
-        //println(file)
-        //val writer = TinyV2MappingsWriter(FileWriter(File(file.parent, "test.tiny")), "srg", "intermediary")
-        //writer.write(srgToIntermediary)
+        println(file)
+        TinyV2MappingsWriter(FileWriter(File(file.parent, "test.tiny")), "srg", "intermediary").use {
+            it.write(srgToIntermediary)
+        }
         /*
          * TODO: remap the client jar obf -> srg ---- Done
          * TODO: decompile srg jar
